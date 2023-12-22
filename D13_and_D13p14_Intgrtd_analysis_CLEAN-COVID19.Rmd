@@ -1,0 +1,273 @@
+---
+title: "D13_and_D13p14_Intgrtd_analysis"
+output: html_document
+---
+
+```{r setup, echo=FALSE, cache=FALSE}
+library(knitr)
+library(rmdformats)
+library(Seurat)
+library(tidyverse)
+
+## Global options
+options(max.print="500")
+opts_chunk$set(echo=TRUE,
+	             cache=TRUE,
+               prompt=FALSE,
+               tidy=TRUE,
+               comment=NA,
+               message=FALSE,
+               warning=FALSE,
+               cache.lazy = FALSE)
+opts_knit$set(width=500)
+
+library(ggplot2)
+
+```
+
+```{r}
+#unloadNamespace("Seurat")
+```
+
+# Notes
+
+All the information needed, and the tutorials this document is based on, can be found at https://satijalab.org/seurat/.
+
+ScRNAseq analyses below (for Vanslambrouck et al, "Kidney organoids reveal redundancy in viral entry pathways during ACE2-dependent SARS-CoV-2 infection") were performed on the d13p14 condition derived from our existing published single cell dataset of 2 integrated conditions: iPSC-derived kidney organoid progenitors (d13; day 13 of differentiation) and the resulting PT-enhanced organoids (d13p14; day 13 differentiation plus 14 days of organoid culture). GEO accession: GSE184928. Original reference: Vanslambrouck et al Nat Commun 2022, https://doi.org/10.1038/s41467-022-33623-z. 
+
+The d13p14 dataset consisted of >11,000 cells from 4 hashtag oligo barcoded replicates. Original library demultiplexing in CellRanger, normalisation, and marker analysis in Seurat (3.1.4) were performed as described previously (https://doi.org/10.1038/s41467-022-33623-z). 
+
+# Reading in objects 
+
+
+```{r}
+read_rds("/group/kidn1/Group-Little_MCRI/People/JessV/Profiling/DD156_1502cln2_ExtDiff_CDBLY2_scRNASeq/ExtDiff_Hashing.rds")
+
+```
+
+
+```{r}
+Seurat <- read_rds("/group/kidn1/Group-Little_MCRI/People/JessV/Profiling/DD156_1502cln2_ExtDiff_CDBLY2_scRNASeq/ExtDiff_Hashing.rds")
+
+```
+
+
+```{r}
+
+Seurat$d13$age <- "D13"
+Seurat$d13p14$age <- "D13p14"
+
+```
+
+
+# Quality Control
+
+Filtering of RNA based on mitochondrial genes, nfeature_RNA and nCount_RNA was performed prior to integration of cell barcodes (https://doi.org/10.1038/s41467-022-33623-z). Normalisation and scaling is performed below: 
+
+
+```{r}
+s.genes <- cc.genes$s.genes
+g2m.genes <- cc.genes$g2m.genes
+
+Seurat$d13 <- NormalizeData(Seurat$d13)
+Seurat$d13p14 <- NormalizeData(Seurat$d13p14)
+
+Seurat$d13 <- CellCycleScoring(Seurat$d13, s.features = s.genes, g2m.features = g2m.genes, set.ident = TRUE)
+Seurat$d13p14 <- CellCycleScoring(Seurat$d13p14, s.features = s.genes, g2m.features = g2m.genes, set.ident = TRUE)
+
+Seurat$d13 <- SCTransform(Seurat$d13, vars.to.regress = c("G2M.Score", "S.Score"), verbose = FALSE)
+Seurat$d13p14 <- SCTransform(Seurat$d13p14, vars.to.regress = c("G2M.Score", "S.Score"), verbose = FALSE)
+```
+
+# Dimensional Reduction
+
+```{r}
+Seurat$d13 <- RunPCA(Seurat$d13, verbose = F)
+Seurat$d13p14 <- RunPCA(Seurat$d13p14, verbose = F)
+#seurat <- RunUMAP(seurat, dims = 1:30, verbose = F)
+
+DimPlot(Seurat$d13, reduction = "pca", dims = c(1,2))
+DimPlot(Seurat$d13p14, reduction = "pca", dims = c(1,2))
+```
+
+Confirming on UMAP:
+
+```{r}
+Seurat$d13  <- RunUMAP(Seurat$d13, dims = 1:30, seed.use = 250395, n.components = 2)
+Seurat$d13p14  <- RunUMAP(Seurat$d13p14, dims = 1:30, seed.use = 250395, n.components = 2)
+
+DimPlot(Seurat$d13, reduction = "umap", group.by = "Phase")
+DimPlot(Seurat$d13p14, reduction = "umap", group.by = "Phase")
+
+```
+
+# Cell clustering
+
+```{r}
+Seurat$d13 <- FindNeighbors(Seurat$d13, dims = 1:30, verbose = F)
+Seurat$d13p14 <- FindNeighbors(Seurat$d13p14, dims = 1:30, verbose = F)
+
+Seurat$d13 <- FindClusters(Seurat$d13, resolution = seq(from = 0, to = 2, by = 0.1), verbose = F)
+Seurat$d13p14 <- FindClusters(Seurat$d13p14, resolution = seq(from = 0, to = 2, by = 0.1), verbose = F)
+
+```
+
+Visualise the outputs of above clustering, now stored as new column in the meta.data:
+
+```{r}
+head(Seurat$d13@meta.data, 20)[, 13:34]
+head(Seurat$d13p14@meta.data, 20)[, 13:34]
+```
+
+Visualise above output & relationship using `clustree` package (Developer: L Zappier)
+
+```{r}
+# install.packages("ggraph")
+# install.packages("clustree")
+library(ggraph)
+clustree::clustree(Seurat$d13, suffix = "SCT_snn_res.")
+clustree::clustree(Seurat$d13p14, suffix = "SCT_snn_res.")
+```
+
+Visualise clustering resolution of 0.7 and 0.5:
+
+```{r}
+DimPlot(Seurat$d13, reduction = "umap", group.by = "SCT_snn_res.0.7", label = T)
+DimPlot(Seurat$d13p14, reduction = "umap", group.by = "SCT_snn_res.0.5", label = T)
+
+```
+
+Confirming contribution of cells from each individual replicate to the various clusters: 
+
+```{r}
+options(max.print=999999)
+```
+
+```{r}
+table(Seurat$d13$hash.ID, Seurat$d13$SCT_snn_res.0.7)
+table(Seurat$d13p14$hash.ID, Seurat$d13p14$SCT_snn_res.0.5)
+```
+
+# Set chosen clustering resolution to objects
+
+```{r}
+Seurat$d13 <- SetIdent(Seurat$d13, value = "SCT_snn_res.0.7")
+Seurat$d13p14 <- SetIdent(Seurat$d13p14, value = "SCT_snn_res.0.5")
+
+DimPlot(Seurat$d13, label = T)
+DimPlot(Seurat$d13p14, label = T)
+
+```
+
+Writing resolution into meta.data slot 'Cluster', setting "active.ident" for FindAllMarkers function as default for retrieval of cluster information: 
+
+```{r}
+Seurat$d13$Cluster <- Seurat$d13$SCT_snn_res.0.7
+Seurat$d13p14$Cluster <- Seurat$d13p14$SCT_snn_res.0.5
+```
+
+```{r}
+Idents(Seurat$d13) <- "Cluster"
+Idents(Seurat$d13p14) <- "Cluster"
+```
+
+
+# Marker analysis
+
+Set default assay to RNA for objects:
+
+```{r}
+DefaultAssay(Seurat$d13) <- "RNA"
+DefaultAssay(Seurat$d13p14) <- "RNA"
+```
+
+Identify markers within clusters using the `FindAllMarkers` function: 
+
+```{r}
+markers.d13 <- FindAllMarkers(object = Seurat$d13, # select our object
+                          logfc.threshold = 0.25, # the threshold above which genes must be DE to be called markers. 
+                          min.pct = 0.1, # minimum % of cells in the cluster a marker must be expressed in. 
+                          only.pos = T, # set to TRUE - only returns genes that are increased to simplify output
+                          return.thresh = 0.05, # will only return results with a p < specified value
+                          test.use = "t") 
+
+markers.d13p14 <- FindAllMarkers(object = Seurat$d13p14, # select our object
+                          logfc.threshold = 0.25, # the threshold above which genes must be DE to be called markers. 
+                          min.pct = 0.1, # minimum % of cells in the cluster a marker must be expressed in. 
+                          only.pos = T, # set to TRUE - only returns genes that are increased to simplify output
+                          return.thresh = 0.05, # will only return results with a p < specified value
+                          test.use = "t")
+
+```
+
+Export as .csv file (d13p14 condition):
+
+```{r}
+write_csv(markers.d13p14, path = "output/Cluster_markers_D13p14.csv") # export the markers file as a csv
+
+export.markers.d13p14 <- lapply(0:(length(unique(Seurat$d13p14@active.ident))-1), # export markers as an excel table divided by cluster
+                         function(x) {
+    markers.d13p14 %>% #generate a list where each component is a filtered table of each cluster's markers
+        dplyr::filter(cluster == x, p_val_adj < 0.05, avg_logFC > 0) %>% 
+        dplyr::arrange(-avg_logFC) %>%
+        select(Gene = gene, LogFC = avg_logFC, pVal = p_val_adj)
+})
+# export the table to excel file
+WriteXLS::WriteXLS(export.markers.d13p14,
+                   ExcelFileName = "output/Cluster_markers_D13p14.csv",
+                   SheetNames = paste0("Cluster ",
+                                    0:(length(unique(Seurat$d13p14@active.ident))-1)))
+```
+
+
+# Visualising gene expression: COVID-19 project
+
+
+### Expression of entry and pro-viral factors in d13p14 organoids
+
+```{r}
+
+DotPlot(Seurat$d13p14, features = c("ACE2", "ANPEP", "DPP4", "NRP1", "BSG", "ITGA5", "ITGB1","CLEC4G", "CLEC4M", "CD209", "AXL", "HAVCR1", "TMPRSS2", "TMPRSS4", "TMPRSS11A", "TMPRSS11B", "CTSL", "CTSB", "FURIN", "ADAM17", "AP1G1", "AP1B1", "AAGAB", "CHUK", "NFE2", "TRAF3IP2", "TRDMT1", "RIPK4", "TAOK2", "ROCK1"), group.by = "Cluster") + theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+# export above plot as png file:
+
+png(filename = "output/EntryFactors_COVIDpaper-revision_ExtDiff_DotPlot_1.png", width = 300, height = 200, units = "mm", res = 1200)
+DotPlot(Seurat$d13p14, features = c("ACE2", "ANPEP", "DPP4", "NRP1", "BSG", "ITGA5", "ITGB1","CLEC4G", "CLEC4M", "CD209", "AXL", "HAVCR1", "TMPRSS2", "TMPRSS4", "TMPRSS11A", "TMPRSS11B", "CTSL", "CTSB", "FURIN", "ADAM17", "AP1G1", "AP1B1", "AAGAB", "CHUK", "NFE2", "TRAF3IP2", "TRDMT1", "RIPK4", "TAOK2", "ROCK1"), group.by = "Cluster") + theme(axis.text.x = element_text(angle = 90, hjust = 1))
+dev.off()
+
+```
+
+### Expression of TMPRSS family members in d13p14 organoids 
+
+
+TMPRSS family members across all clusters:
+
+
+```{r}
+# Note: CORIN = TMPRSS10
+
+DotPlot(Seurat$d13p14, features = c("ACE2", "TMPRSS2", "TMPRSS3", "TMPRSS4", "CORIN", "TMPRSS11A", "TMPRSS11B", "TMPRSS11D","TMPRSS11E", "TMPRSS11F", "TMPRSS13", "CTSL", "CTSB"), group.by = "Cluster") + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# export the above plot
+
+png(filename = "output/ACE2-TMPRSS-CTS_ExtDiff_JVIROL-REVISION_DotPlot_2.png", width = 200, height = 150, units = "mm", res = 1200)
+DotPlot(Seurat$d13p14, features = c("ACE2", "TMPRSS2", "TMPRSS3", "TMPRSS4", "CORIN", "TMPRSS11A", "TMPRSS11B", "TMPRSS11D","TMPRSS11E", "TMPRSS11F", "TMPRSS13", "CTSL", "CTSB"), group.by = "Cluster") + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+dev.off()
+
+
+```
+
+Selected TMPRSS members across PT clusters:
+
+```{r}
+
+DotPlot(Seurat$d13p14, features = c("ACE2", "TMPRSS2", "TMPRSS4", "TMPRSS10", "CORIN"), idents = c("1", "13", "15", "17")) + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# export the above plot
+
+png(filename = "output/ACE2-TMPRSS-CTS_ExtDiff_JVirol-REVISION_DotPlot_2.png", width = 120, height = 100, units = "mm", res = 1200)
+DotPlot(Seurat$d13p14, features = c("ACE2", "TMPRSS2", "TMPRSS4", "TMPRSS10", "CORIN"), idents = c("1", "13", "15", "17")) + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+dev.off()
+```
+
+
